@@ -1,0 +1,1 @@
+from advrf_ros2_motors_controller.robot_config import load_robot

@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>advrf_ros2_gravity_compensation</name>
+  <version>0.1.0</version>
+  <description>ROS2 Gravity Compensation Package</description>
+
+  <maintainer email="hugo.pousseur@iit.it">Hugo Pousseur</maintainer>
+  <maintainer email="manuel.delucchi@iit.it">Manuel Delucchi</maintainer>
+
+  <license>TODO</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>advrf_ros2_interfaces</depend>
+
+  <depend>xbot2_interface</depend>
+
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>launch</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
