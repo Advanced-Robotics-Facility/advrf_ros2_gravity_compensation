@@ -8,6 +8,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(advrf_ros2_interfaces REQUIRED)
 
 find_package(xbot2_interface REQUIRED)
@@ -19,6 +20,7 @@ add_executable(advrf_ros2_gravity_compensation
 ament_target_dependencies(advrf_ros2_gravity_compensation
   rclcpp
   sensor_msgs
+  std_srvs
   advrf_ros2_interfaces
 )
 
@@ -28,6 +30,10 @@ target_link_libraries(advrf_ros2_gravity_compensation
 
 install(TARGETS advrf_ros2_gravity_compensation
   DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY launch
+  DESTINATION share/${PROJECT_NAME}
 )
 
 ament_package()

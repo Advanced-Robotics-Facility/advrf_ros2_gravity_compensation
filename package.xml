@@ -13,12 +13,14 @@
 
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
+  <depend>std_srvs</depend>
   <depend>advrf_ros2_interfaces</depend>
 
   <depend>xbot2_interface</depend>
 
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>launch</exec_depend>
+  <exec_depend>advrf_ros2_motors_controller</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
