@@ -16,7 +16,7 @@
   <depend>std_srvs</depend>
   <depend>advrf_ros2_interfaces</depend>
 
-  <depend>xbot2_interface</depend>
+  <depend>pinocchio</depend>
 
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>launch</exec_depend>

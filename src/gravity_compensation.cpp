@@ -4,7 +4,8 @@
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 
-#include <xbot2_interface/xbotinterface2.h>
+#include <pinocchio/parsers/urdf.hpp>
+#include <pinocchio/algorithm/rnea.hpp>
 
 #include <algorithm>
 #include <array>
@@ -36,7 +37,6 @@ public:
     joints_ = declare_parameter<std::vector<std::string>>("joints", std::vector<std::string>{});
     const auto motor_ids = declare_parameter<std::vector<int64_t>>("motor_ids", std::vector<int64_t>{});
     const auto joint_gains = declare_parameter<std::vector<double>>("joint_gains", std::vector<double>{});
-    const auto torque_scale = declare_parameter("torque_scale", 0.0);
     gain_ramp_duration_ = declare_parameter("gain_ramp_duration", 3.0);
 
     // Sanity Checks
@@ -48,8 +48,6 @@ public:
       throw std::invalid_argument("joints must contain unique names");
     if (joint_gains.size() != 5 * joints_.size())
       throw std::invalid_argument("joint_gains must contain five values per joint");
-    if (!std::isfinite(torque_scale) || torque_scale < 0.0 || torque_scale > 1.0)
-      throw std::invalid_argument("torque_scale must be finite and in [0, 1]");
     if (!std::isfinite(gain_ramp_duration_) || gain_ramp_duration_ <= 0.0)
       throw std::invalid_argument("gain_ramp_duration must be finite and positive");
 
@@ -73,18 +71,27 @@ public:
       }
     }
 
-    // Model Initialization (Pinocchio backend - "pin")
-    model_ = XBot::ModelInterface::getModel(urdf, "pin");
-    if (!model_)
-      throw std::runtime_error("Could not create the XBot model");
+    // Model Initialization
+    pinocchio::urdf::buildModelFromXML(urdf, model_);
+    data_ = std::make_unique<pinocchio::Data>(model_);
+    q_ = pinocchio::neutral(model_);
 
-    const auto model_joints = model_->getJointNames();
-    const std::set<std::string> model_joint_set(model_joints.begin(), model_joints.end());
-    for (const auto &name : joints_)
-      if (!model_joint_set.count(name))
+    for (pinocchio::JointIndex id = 1; id < static_cast<pinocchio::JointIndex>(model_.njoints); ++id) {
+      const auto &joint_model = model_.joints[id];
+      if (joint_model.nq() == 1 && joint_model.nv() == 1) {
+        model_joint_indices_.emplace(model_.names[id], JointIndices{joint_model.idx_q(), joint_model.idx_v()});
+      }
+    }
+
+    for (const auto &name : joints_) {
+      if (!model_.existJointName(name))
         throw std::invalid_argument("Joint is absent from robot_description: " + name);
-    for (const auto &name : model_joints)
-      q_[name] = 0.0;
+
+      const auto id = model_.getJointId(name);
+      const auto &joint_model = model_.joints[id];
+      if (joint_model.nq() != 1 || joint_model.nv() != 1)
+        throw std::invalid_argument("Only one-DoF joints are supported: " + name);
+    }
 
     // Pub/Sub Initialization (rx-JointState, tx-MotorTxPdoVector)
     publisher_ = create_publisher<MotorCommands>("tx/motors", rclcpp::QoS(1).reliable().durability_volatile());
@@ -99,11 +106,6 @@ public:
     // Srv Initialization
     service_ = create_service<SetBool>("set_gravity_compensation",
         [this](const std::shared_ptr<SetBool::Request> request, std::shared_ptr<SetBool::Response> response) {
-          if (request->data && get_parameter("torque_scale").as_double() <= 0.0) {
-            response->success = false;
-            response->message = "Set torque_scale above zero before enabling gravity compensation";
-            return;
-          }
           begin_gain_ramp(request->data);
           response->success = true;
           response->message = request->data
@@ -112,12 +114,16 @@ public:
         }
     );
 
-    RCLCPP_INFO(get_logger(),
-                "Gravity compensation ready for %zu joints (torque_scale=%.3f, impedance gains held)",
-                joints_.size(), torque_scale);
+    RCLCPP_INFO(get_logger(), "Gravity compensation ready for %zu joints", joints_.size());
   }
 
 private:
+  struct JointIndices
+  {
+    Eigen::Index idx_q;
+    Eigen::Index idx_v;
+  };
+
   // State Machine
   // - Hold: complete gains, tor_ref=0
   // - RampingToGravity: reduces gradually gain-0 (stiffness) and gain_1 (damping)
@@ -186,33 +192,20 @@ private:
         RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "Missing feedback for joint %s", joint.c_str());
         return;
       }
-      q_[joint] = position->second;
     }
     for (const auto &[name, position] : measured)
-      if (q_.count(name))
-        q_[name] = position;
+      if (const auto indices = model_joint_indices_.find(name); indices != model_joint_indices_.end())
+        q_[indices->second.idx_q] = position;
 
-    model_->setJointPositionMinimal(q_);
-    model_->update();
-
-    Eigen::VectorXd gravity;
-    XBot::v2::JointNameMap gravity_by_name;
-    model_->computeGravityCompensation(gravity);
-    model_->vToMap(gravity, gravity_by_name);
+    const auto &gravity = pinocchio::computeGeneralizedGravity(model_, *data_, q_);
     update_gains();
-
-    const double configured_scale = get_parameter("torque_scale").as_double();
-    const double torque_scale = state_ == State::Hold ? 0.0 : configured_scale;
-    if (!std::isfinite(configured_scale) || configured_scale < 0.0 || configured_scale > 1.0) {
-      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000, "torque_scale is outside [0, 1]; command not published");
-      return;
-    }
 
     MotorCommands output;
     output.data.reserve(joints_.size());
     for (std::size_t i = 0; i < joints_.size(); ++i) {
       const auto &joint = joints_[i];
-      const auto torque = torque_scale * gravity_by_name.at(joint);
+      const auto &indices = model_joint_indices_.at(joint);
+      const auto torque = state_ == State::Hold ? 0.0 : gravity[indices.idx_v];
       if (!std::isfinite(torque)) {
         RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000,
                               "Non-finite gravity torque for %s; command not published",
@@ -222,7 +215,7 @@ private:
 
       MotorCommand command;
       command.ecat_id = motor_ids_.at(joint);
-      command.pos_ref = static_cast<float>(q_.at(joint));
+      command.pos_ref = static_cast<float>(q_[indices.idx_q]);
       command.vel_ref = 0.0F;
       command.tor_ref = static_cast<float>(torque);
       command.gain_0 = current_gains_[i][0];
@@ -235,8 +228,10 @@ private:
     publisher_->publish(output);
   }
 
-  XBot::ModelInterface::Ptr model_;
-  XBot::v2::JointNameMap q_;
+  pinocchio::Model model_;
+  std::unique_ptr<pinocchio::Data> data_;
+  Eigen::VectorXd q_;
+  std::unordered_map<std::string, JointIndices> model_joint_indices_;
 
   std::vector<std::string> joints_;
   std::map<std::string, int32_t> motor_ids_;
