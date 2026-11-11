@@ -3,7 +3,7 @@ advrf_ros2_gravity_compensation
 
 Launch the gravity compensation: 
 ```bash
-ros2 launch advrf_ros2_miranda_bringup gravity_compensation.launch.py start_bridge:=true active_tx_on_first_msg:=false use_rviz:=true torque_scale:=0.02
+ros2 launch advrf_ros2_miranda_bringup gravity_compensation.launch.py start_bridge:=true active_tx_on_first_msg:=false use_rviz:=true
 ```
 
 Check topic with:

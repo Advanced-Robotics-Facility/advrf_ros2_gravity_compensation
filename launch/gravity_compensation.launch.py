@@ -25,10 +25,6 @@ def setup(context):
     motor_ids   = [controller['motor_ids'][index] for index in indices]
     joint_gains = [value for index in indices for value in controller['joint_gains'][5 * index:5 * (index + 1)]]
 
-    torque_scale = float(value('torque_scale'))
-    if not 0.0 <= torque_scale <= 1.0:
-        raise ValueError('torque_scale must be in [0, 1]')
-
     gravity = Node(
         package='advrf_ros2_gravity_compensation',
         executable='advrf_ros2_gravity_compensation',
@@ -40,7 +36,6 @@ def setup(context):
             'joints': joints,
             'motor_ids': motor_ids,
             'joint_gains': joint_gains,
-            'torque_scale': torque_scale,
             'gain_ramp_duration': 3.0,
         }],
         remappings=[
@@ -58,7 +53,6 @@ def generate_launch_description():
         'ecat_namespace':         '',
         'robot_description_file': 'auto',
         'gravity_joints':         '',
-        'torque_scale':           '0.0',
     }
     descriptions = {
         'config_dir':             'Robot directory containing config/ and urdf/',
@@ -66,7 +60,6 @@ def generate_launch_description():
         'ecat_namespace':         'EtherCAT namespace; defaults to <namespace>/ecat',
         'robot_description_file': 'URDF/Xacro path',
         'gravity_joints':         'Comma-separated joints controlled by gravity compensation',
-        'torque_scale':           'Gravity torque multiplier in [0, 1]; start from zero',
     }
     arguments = [
         DeclareLaunchArgument(name, default_value=default, description=descriptions[name])

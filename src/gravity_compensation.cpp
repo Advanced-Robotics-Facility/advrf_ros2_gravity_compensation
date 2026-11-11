@@ -36,7 +36,6 @@ public:
     joints_ = declare_parameter<std::vector<std::string>>("joints", std::vector<std::string>{});
     const auto motor_ids = declare_parameter<std::vector<int64_t>>("motor_ids", std::vector<int64_t>{});
     const auto joint_gains = declare_parameter<std::vector<double>>("joint_gains", std::vector<double>{});
-    const auto torque_scale = declare_parameter("torque_scale", 0.0);
     gain_ramp_duration_ = declare_parameter("gain_ramp_duration", 3.0);
 
     // Sanity Checks
@@ -48,8 +47,6 @@ public:
       throw std::invalid_argument("joints must contain unique names");
     if (joint_gains.size() != 5 * joints_.size())
       throw std::invalid_argument("joint_gains must contain five values per joint");
-    if (!std::isfinite(torque_scale) || torque_scale < 0.0 || torque_scale > 1.0)
-      throw std::invalid_argument("torque_scale must be finite and in [0, 1]");
     if (!std::isfinite(gain_ramp_duration_) || gain_ramp_duration_ <= 0.0)
       throw std::invalid_argument("gain_ramp_duration must be finite and positive");
 
@@ -99,11 +96,6 @@ public:
     // Srv Initialization
     service_ = create_service<SetBool>("set_gravity_compensation",
         [this](const std::shared_ptr<SetBool::Request> request, std::shared_ptr<SetBool::Response> response) {
-          if (request->data && get_parameter("torque_scale").as_double() <= 0.0) {
-            response->success = false;
-            response->message = "Set torque_scale above zero before enabling gravity compensation";
-            return;
-          }
           begin_gain_ramp(request->data);
           response->success = true;
           response->message = request->data
@@ -113,8 +105,8 @@ public:
     );
 
     RCLCPP_INFO(get_logger(),
-                "Gravity compensation ready for %zu joints (torque_scale=%.3f, impedance gains held)",
-                joints_.size(), torque_scale);
+                "Gravity compensation ready for %zu joints (full gravity torque, impedance gains held)",
+                joints_.size());
   }
 
 private:
@@ -201,18 +193,11 @@ private:
     model_->vToMap(gravity, gravity_by_name);
     update_gains();
 
-    const double configured_scale = get_parameter("torque_scale").as_double();
-    const double torque_scale = state_ == State::Hold ? 0.0 : configured_scale;
-    if (!std::isfinite(configured_scale) || configured_scale < 0.0 || configured_scale > 1.0) {
-      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000, "torque_scale is outside [0, 1]; command not published");
-      return;
-    }
-
     MotorCommands output;
     output.data.reserve(joints_.size());
     for (std::size_t i = 0; i < joints_.size(); ++i) {
       const auto &joint = joints_[i];
-      const auto torque = torque_scale * gravity_by_name.at(joint);
+      const auto torque = state_ == State::Hold ? 0.0 : gravity_by_name.at(joint);
       if (!std::isfinite(torque)) {
         RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000,
                               "Non-finite gravity torque for %s; command not published",
