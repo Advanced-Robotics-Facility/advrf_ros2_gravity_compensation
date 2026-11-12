@@ -198,7 +198,6 @@ private:
     for (std::size_t i = 0; i < joints_.size(); ++i) {
       const auto &joint = joints_[i];
       const auto torque = gravity_by_name.at(joint);
-      
       if (!std::isfinite(torque)) {
         RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000,
                               "Non-finite gravity torque for %s; command not published",
