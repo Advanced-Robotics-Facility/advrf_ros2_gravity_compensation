@@ -60,7 +60,7 @@ In the generic launch, omitting `gravity_config` selects all configured joints.
 Node: `gravity_compensation` (executable `advrf_ros2_gravity_compensation`).
 
 - Subscribe: `rx/joint_states` (`sensor_msgs/msg/JointState`).
-- Publish: `tx/motors` (`advrf_ros2_interfaces/msg/MotorTxPdoVector`).
+- Publish: `tx/motors` (`advrf_ros2_interfaces/msg/MotorTxPdo`).
 - Service: `set_gravity_compensation` (`std_srvs/srv/SetBool`).
 - Enabling ramps position stiffness and damping to zero while applying gravity torque; disabling restores configured gains and returns to hold.
 - Commands are updated on valid joint feedback.

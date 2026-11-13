@@ -1,6 +1,5 @@
 #include <rclcpp/rclcpp.hpp>
 #include <advrf_ros2_interfaces/msg/motor_tx_pdo.hpp>
-#include <advrf_ros2_interfaces/msg/motor_tx_pdo_vector.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 
@@ -21,8 +20,7 @@
 #include <vector>
 
 using JointState = sensor_msgs::msg::JointState;
-using MotorCommand = advrf_ros2_interfaces::msg::MotorTxPdo;
-using MotorCommands = advrf_ros2_interfaces::msg::MotorTxPdoVector;
+using MotorCommands = advrf_ros2_interfaces::msg::MotorTxPdo;
 
 class GravityCompensation : public rclcpp::Node
 {
@@ -83,7 +81,7 @@ public:
     for (const auto &name : model_joints)
       q_[name] = 0.0;
 
-    // Pub/Sub Initialization (rx-JointState, tx-MotorTxPdoVector)
+    // Pub/Sub Initialization (rx-JointState, tx-MotorTxPdo)
     publisher_ = create_publisher<MotorCommands>("tx/motors", rclcpp::QoS(1).reliable().durability_volatile());
     subscription_ = create_subscription<JointState>("rx/joint_states", rclcpp::SensorDataQoS(),
         [this](JointState::ConstSharedPtr message) { update(*message); }
@@ -194,7 +192,7 @@ private:
     update_gains();
 
     MotorCommands output;
-    output.data.reserve(joints_.size());
+    output.header.stamp = now();
     for (std::size_t i = 0; i < joints_.size(); ++i) {
       const auto &joint = joints_[i];
       const auto torque = gravity_by_name.at(joint);
@@ -205,17 +203,20 @@ private:
         return;
       }
 
-      MotorCommand command;
-      command.ecat_id = motor_ids_.at(joint);
-      command.pos_ref = static_cast<float>(q_.at(joint));
-      command.vel_ref = 0.0F;
-      command.tor_ref = static_cast<float>(torque);
-      command.gain_0 = current_gains_[i][0];
-      command.gain_1 = current_gains_[i][1];
-      command.gain_2 = current_gains_[i][2];
-      command.gain_3 = current_gains_[i][3];
-      command.gain_4 = current_gains_[i][4];
-      output.data.push_back(command);
+      output.ecat_id.push_back(motor_ids_.at(joint));
+      output.pos_ref.push_back(static_cast<float>(q_.at(joint)));
+      output.vel_ref.push_back(0.0F);
+      output.tor_ref.push_back(static_cast<float>(torque));
+      output.gain_0.push_back(current_gains_[i][0]);
+      output.gain_1.push_back(current_gains_[i][1]);
+      output.gain_2.push_back(current_gains_[i][2]);
+      output.gain_3.push_back(current_gains_[i][3]);
+      output.gain_4.push_back(current_gains_[i][4]);
+      output.cur_ref.push_back(0);
+      output.fault_ack.push_back(0);
+      output.ts.push_back(0);
+      output.op_idx_aux.push_back(0);
+      output.aux.push_back(0);
     }
     publisher_->publish(output);
   }
