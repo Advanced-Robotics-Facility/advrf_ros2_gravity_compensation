@@ -79,4 +79,3 @@ Node: `gravity_compensation` (executable `advrf_ros2_gravity_compensation`).
 | Startup rejects configuration | URDF, unique joint names/IDs and five gains per joint |
 | No commands | Feedback topic, namespace and positions for every controlled joint |
 | No robot response | Bridge TX activation and EtherCAT backend |
-| Model creation fails | XBot model backend and robot description |
