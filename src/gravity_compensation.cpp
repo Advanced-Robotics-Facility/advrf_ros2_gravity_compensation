@@ -3,7 +3,8 @@
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 
-#include <xbot2_interface/xbotinterface2.h>
+#include <pinocchio/parsers/urdf.hpp>
+#include <pinocchio/algorithm/rnea.hpp>
 
 #include <algorithm>
 #include <array>
@@ -68,18 +69,27 @@ public:
       }
     }
 
-    // Model Initialization (Pinocchio backend - "pin")
-    model_ = XBot::ModelInterface::getModel(urdf, "pin");
-    if (!model_)
-      throw std::runtime_error("Could not create the XBot model");
+    // Model Initialization
+    pinocchio::urdf::buildModelFromXML(urdf, model_);
+    data_ = std::make_unique<pinocchio::Data>(model_);
+    q_ = pinocchio::neutral(model_);
 
-    const auto model_joints = model_->getJointNames();
-    const std::set<std::string> model_joint_set(model_joints.begin(), model_joints.end());
-    for (const auto &name : joints_)
-      if (!model_joint_set.count(name))
+    for (pinocchio::JointIndex id = 1; id < static_cast<pinocchio::JointIndex>(model_.njoints); ++id) {
+      const auto &joint_model = model_.joints[id];
+      if (joint_model.nq() == 1 && joint_model.nv() == 1) {
+        model_joint_indices_.emplace(model_.names[id], JointIndices{joint_model.idx_q(), joint_model.idx_v()});
+      }
+    }
+
+    for (const auto &name : joints_) {
+      if (!model_.existJointName(name))
         throw std::invalid_argument("Joint is absent from robot_description: " + name);
-    for (const auto &name : model_joints)
-      q_[name] = 0.0;
+
+      const auto id = model_.getJointId(name);
+      const auto& joint_model = model_.joints[id];
+      if (joint_model.nq() != 1 || joint_model.nv() != 1)
+        throw std::invalid_argument("Only one-DoF joints are supported: " + name);
+    }
 
     // Pub/Sub Initialization (rx-JointState, tx-MotorTxPdo)
     publisher_ = create_publisher<MotorCommands>("tx/motors", rclcpp::QoS(1).reliable().durability_volatile());
@@ -108,8 +118,14 @@ public:
   }
 
 private:
+
+  struct JointIndices {
+    Eigen::Index idx_q;
+    Eigen::Index idx_v;
+  };
+
   // State Machine
-  // - Hold: complete gains, tor_ref=0
+  // - Hold: complete gains, gravity compensated with full stiffness/damping gains
   // - RampingToGravity: reduces gradually gain-0 (stiffness) and gain_1 (damping)
   // - Gravity: gain_0 and gain_1 are 0 and gravity compensation is active
   // - RampingToHold: restores gradually the gains
@@ -176,26 +192,21 @@ private:
         RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "Missing feedback for joint %s", joint.c_str());
         return;
       }
-      q_[joint] = position->second;
     }
+
     for (const auto &[name, position] : measured)
-      if (q_.count(name))
-        q_[name] = position;
+      if (const auto indices = model_joint_indices_.find(name); indices != model_joint_indices_.end())
+        q_[indices->second.idx_q] = position;
 
-    model_->setJointPositionMinimal(q_);
-    model_->update();
-
-    Eigen::VectorXd gravity;
-    XBot::v2::JointNameMap gravity_by_name;
-    model_->computeGravityCompensation(gravity);
-    model_->vToMap(gravity, gravity_by_name);
+    const auto &gravity = pinocchio::computeGeneralizedGravity(model_, *data_, q_);
     update_gains();
 
     MotorCommands output;
     output.header.stamp = now();
     for (std::size_t i = 0; i < joints_.size(); ++i) {
       const auto &joint = joints_[i];
-      const auto torque = gravity_by_name.at(joint);
+      const auto &indices = model_joint_indices_.at(joint);
+      const auto torque = gravity[indices.idx_v];
       if (!std::isfinite(torque)) {
         RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000,
                               "Non-finite gravity torque for %s; command not published",
@@ -204,7 +215,7 @@ private:
       }
 
       output.ecat_id.push_back(motor_ids_.at(joint));
-      output.pos_ref.push_back(static_cast<float>(q_.at(joint)));
+      output.pos_ref.push_back(static_cast<float>(q_[indices.idx_q]));
       output.vel_ref.push_back(0.0F);
       output.tor_ref.push_back(static_cast<float>(torque));
       output.gain_0.push_back(current_gains_[i][0]);
@@ -221,8 +232,10 @@ private:
     publisher_->publish(output);
   }
 
-  XBot::ModelInterface::Ptr model_;
-  XBot::v2::JointNameMap q_;
+  pinocchio::Model model_;
+  std::unique_ptr<pinocchio::Data> data_;
+  Eigen::VectorXd q_;
+  std::unordered_map<std::string, JointIndices> model_joint_indices_;
 
   std::vector<std::string> joints_;
   std::map<std::string, int32_t> motor_ids_;

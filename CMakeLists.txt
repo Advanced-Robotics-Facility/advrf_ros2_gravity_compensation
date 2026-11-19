@@ -11,7 +11,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(advrf_ros2_interfaces REQUIRED)
 
-find_package(xbot2_interface REQUIRED)
+find_package(pinocchio REQUIRED)
 
 add_executable(advrf_ros2_gravity_compensation
   src/gravity_compensation.cpp
@@ -25,7 +25,7 @@ ament_target_dependencies(advrf_ros2_gravity_compensation
 )
 
 target_link_libraries(advrf_ros2_gravity_compensation
-  xbot2_interface::xbot2_interface
+  pinocchio::pinocchio
 )
 
 install(TARGETS advrf_ros2_gravity_compensation
