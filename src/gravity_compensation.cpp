@@ -36,6 +36,8 @@ public:
     const auto motor_ids = declare_parameter<std::vector<int64_t>>("motor_ids", std::vector<int64_t>{});
     const auto joint_gains = declare_parameter<std::vector<double>>("joint_gains", std::vector<double>{});
     gain_ramp_duration_ = declare_parameter("gain_ramp_duration", 3.0);
+    const auto gravity_damping = declare_parameter("gravity_damping", 0.0);
+    hold_position_ = declare_parameter("hold_position", false);
 
     // Sanity Checks
     if (urdf.empty())
@@ -48,6 +50,10 @@ public:
       throw std::invalid_argument("joint_gains must contain five values per joint");
     if (!std::isfinite(gain_ramp_duration_) || gain_ramp_duration_ <= 0.0)
       throw std::invalid_argument("gain_ramp_duration must be finite and positive");
+    if (!std::isfinite(gravity_damping) || gravity_damping < 0.0 ||
+        gravity_damping > std::numeric_limits<float>::max())
+      throw std::invalid_argument("gravity_damping must be a nonnegative float32 value");
+    gravity_damping_ = static_cast<float>(gravity_damping);
 
     std::set<int32_t> unique_ids;
     gains_.resize(joints_.size());
@@ -107,7 +113,7 @@ public:
           begin_gain_ramp(request->data);
           response->success = true;
           response->message = request->data
-              ? "Reducing position gains"
+              ? "Ramping to gravity compensation"
               : "Restoring impedance gains";
         }
     );
@@ -126,8 +132,8 @@ private:
 
   // State Machine
   // - Hold: complete gains, gravity compensated with full stiffness/damping gains
-  // - RampingToGravity: reduces gradually gain-0 (stiffness) and gain_1 (damping)
-  // - Gravity: gain_0 and gain_1 are 0 and gravity compensation is active
+  // - RampingToGravity: transitions from impedance gains to gravity-mode gains
+  // - Gravity: zero stiffness with optional damping
   // - RampingToHold: restores gradually the gains
   enum class State { RampingToGravity, Gravity, RampingToHold, Hold };
 
@@ -138,8 +144,11 @@ private:
     if (enable) {
       for (auto &gain : ramp_target_gains_) {
         gain[0] = 0.0F;
-        gain[1] = 0.0F;
+        gain[1] = gravity_damping_;
       }
+    }
+    else if (hold_position_ && (state_ == State::Gravity || state_ == State::RampingToGravity)) {
+      hold_positions_.clear();
     }
     state_ = enable ? State::RampingToGravity : State::RampingToHold;
     ramp_start_ = std::chrono::steady_clock::now();
@@ -198,6 +207,10 @@ private:
       if (const auto indices = model_joint_indices_.find(name); indices != model_joint_indices_.end())
         q_[indices->second.idx_q] = position;
 
+    if (hold_position_ && hold_positions_.empty())
+      for (const auto &joint : joints_)
+        hold_positions_.push_back(measured.at(joint));
+
     const auto &gravity = pinocchio::computeGeneralizedGravity(model_, *data_, q_);
     update_gains();
 
@@ -215,7 +228,8 @@ private:
       }
 
       output.ecat_id.push_back(motor_ids_.at(joint));
-      output.pos_ref.push_back(static_cast<float>(q_[indices.idx_q]));
+      const auto reference = hold_position_ ? hold_positions_[i] : q_[indices.idx_q];
+      output.pos_ref.push_back(static_cast<float>(reference));
       output.vel_ref.push_back(0.0F);
       output.tor_ref.push_back(static_cast<float>(torque));
       output.gain_0.push_back(current_gains_[i][0]);
@@ -244,6 +258,9 @@ private:
   std::vector<std::array<float, 5>> ramp_start_gains_;
   std::vector<std::array<float, 5>> ramp_target_gains_;
   double gain_ramp_duration_{3.0};
+  float gravity_damping_{0.0F};
+  bool hold_position_{false};
+  std::vector<double> hold_positions_;
   State state_{State::Hold};
   std::chrono::steady_clock::time_point ramp_start_;
 
